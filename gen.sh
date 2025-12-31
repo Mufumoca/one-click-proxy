@@ -29,6 +29,95 @@ init_config() {
     fi
 }
 
+# 检查并安装 xray
+install_xray() {
+    if command -v xray &> /dev/null; then
+        echo -e "${GREEN}Xray 已安装${NC}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}正在安装 Xray...${NC}"
+    
+    # 使用官方安装脚本
+    if bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>/dev/null; then
+        echo -e "${GREEN}Xray 安装成功！${NC}"
+        return 0
+    fi
+    
+    # 备用方法：手动下载
+    echo -e "${YELLOW}尝试备用安装方法...${NC}"
+    local arch=$(uname -m)
+    local xray_arch=""
+    case $arch in
+        x86_64|amd64) xray_arch="64" ;;
+        aarch64|arm64) xray_arch="arm64-v8a" ;;
+        armv7l) xray_arch="arm32-v7a" ;;
+        *) echo -e "${RED}不支持的架构: $arch${NC}"; return 1 ;;
+    esac
+    
+    local latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -z "$latest_version" ]; then
+        latest_version="v1.8.7"
+    fi
+    
+    local download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${xray_arch}.zip"
+    
+    echo -e "${YELLOW}下载 Xray ${latest_version}...${NC}"
+    curl -L -o /tmp/xray.zip "$download_url" 2>/dev/null
+    
+    if [ -f /tmp/xray.zip ]; then
+        unzip -o /tmp/xray.zip -d /tmp/xray_temp 2>/dev/null
+        if [ -f /tmp/xray_temp/xray ]; then
+            sudo mv /tmp/xray_temp/xray /usr/local/bin/xray
+            sudo chmod +x /usr/local/bin/xray
+            rm -rf /tmp/xray.zip /tmp/xray_temp
+            echo -e "${GREEN}Xray 安装成功！${NC}"
+            return 0
+        fi
+    fi
+    
+    echo -e "${RED}Xray 安装失败${NC}"
+    return 1
+}
+
+# 生成 Reality 密钥对
+generate_reality_keypair() {
+    local public_key=""
+    local private_key=""
+    
+    # 检查 xray 是否已安装
+    if ! command -v xray &> /dev/null; then
+        echo -e "${YELLOW}未检测到 Xray，正在自动安装...${NC}"
+        if ! install_xray; then
+            echo -e "${RED}无法安装 Xray，请手动安装后重试${NC}"
+            echo -e "${YELLOW}安装命令: bash -c \"\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ install${NC}"
+            return 1
+        fi
+    fi
+    
+    # 生成密钥对
+    echo -e "${GREEN}正在生成 Reality X25519 密钥对...${NC}"
+    local keys=$(xray x25519 2>/dev/null)
+    
+    if [ -z "$keys" ]; then
+        echo -e "${RED}生成密钥对失败${NC}"
+        return 1
+    fi
+    
+    REALITY_PRIVATE_KEY=$(echo "$keys" | grep "Private key:" | awk '{print $3}')
+    REALITY_PUBLIC_KEY=$(echo "$keys" | grep "Public key:" | awk '{print $3}')
+    
+    if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
+        echo -e "${RED}解析密钥对失败${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}密钥对生成成功！${NC}"
+    echo -e "  Private Key: ${YELLOW}$REALITY_PRIVATE_KEY${NC}"
+    echo -e "  Public Key:  ${YELLOW}$REALITY_PUBLIC_KEY${NC}"
+    return 0
+}
+
 # 生成随机UUID
 generate_uuid() {
     cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || echo "$(date +%s)-$(shuf -i 1000-9999 -n 1)-$(shuf -i 1000-9999 -n 1)-$(shuf -i 1000-9999 -n 1)-$(shuf -i 100000000000-999999999999 -n 1)"
@@ -165,39 +254,31 @@ generate_vless_reality() {
     read -p "SNI [默认: $DEFAULT_SNI]: " sni
     sni=${sni:-$DEFAULT_SNI}
     
-    # Reality 密钥对 - 尝试使用 xray 生成，否则需要用户输入
-    local public_key=""
-    local private_key=""
-    
-    if command -v xray &> /dev/null; then
-        echo -e "${GREEN}检测到 xray，正在生成 Reality 密钥对...${NC}"
-        local keys=$(xray x25519)
-        private_key=$(echo "$keys" | grep "Private key:" | awk '{print $3}')
-        public_key=$(echo "$keys" | grep "Public key:" | awk '{print $3}')
-        echo -e "${GREEN}已自动生成密钥对${NC}"
+    # 自动生成 Reality 密钥对
+    echo ""
+    if ! generate_reality_keypair; then
+        echo ""
+        echo -e "${YELLOW}请手动输入密钥对：${NC}"
+        read -p "Reality Private Key (服务端用): " REALITY_PRIVATE_KEY
+        read -p "Reality Public Key (客户端用): " REALITY_PUBLIC_KEY
+        
+        if [ -z "$REALITY_PUBLIC_KEY" ]; then
+            echo -e "${RED}错误：必须提供 Reality Public Key！${NC}"
+            return 1
+        fi
     fi
     
-    if [ -z "$public_key" ]; then
-        echo -e "${YELLOW}========================================${NC}"
-        echo -e "${YELLOW}需要 Reality 密钥对！${NC}"
-        echo -e "${YELLOW}请在服务器上运行: xray x25519${NC}"
-        echo -e "${YELLOW}或使用在线工具生成 X25519 密钥对${NC}"
-        echo -e "${YELLOW}========================================${NC}"
+    local public_key="$REALITY_PUBLIC_KEY"
+    local private_key="$REALITY_PRIVATE_KEY"
+    
+    echo ""
+    read -p "是否使用自动生成的密钥? [Y/n]: " use_auto_key
+    if [[ "$use_auto_key" =~ ^[Nn]$ ]]; then
+        read -p "输入 Private Key: " private_key
+        read -p "输入 Public Key: " public_key
     fi
     
-    read -p "Reality Private Key (服务端用) [留空使用自动生成]: " input_privkey
-    [ -n "$input_privkey" ] && private_key="$input_privkey"
-    
-    read -p "Reality Public Key (客户端用) [留空使用自动生成]: " input_pubkey
-    [ -n "$input_pubkey" ] && public_key="$input_pubkey"
-    
-    if [ -z "$public_key" ]; then
-        echo -e "${RED}错误：必须提供 Reality Public Key！${NC}"
-        echo -e "${YELLOW}请先运行 'xray x25519' 生成密钥对${NC}"
-        return 1
-    fi
-    
-    local short_id=$(openssl rand -hex 8 2>/dev/null || head -c 16 /dev/urandom | xxd -p | head -c 16)
+    local short_id=$(openssl rand -hex 8 2>/dev/null || head -c 16 /dev/urandom | xxd -p 2>/dev/null | head -c 16 || echo "$(date +%s%N | md5sum | head -c 16)")
     read -p "Short ID [默认: $short_id]: " input_shortid
     short_id=${input_shortid:-$short_id}
     
