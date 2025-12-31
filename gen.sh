@@ -31,21 +31,58 @@ init_config() {
 
 # 检查并安装 xray
 install_xray() {
+    # 检查是否已安装
     if command -v xray &> /dev/null; then
-        echo -e "${GREEN}Xray 已安装${NC}"
+        echo -e "${GREEN}Xray 已安装: $(which xray)${NC}"
+        return 0
+    fi
+    
+    # 检查 /usr/local/bin/xray
+    if [ -x "/usr/local/bin/xray" ]; then
+        export PATH="/usr/local/bin:$PATH"
+        echo -e "${GREEN}Xray 已安装: /usr/local/bin/xray${NC}"
         return 0
     fi
     
     echo -e "${YELLOW}正在安装 Xray...${NC}"
     
-    # 使用官方安装脚本
-    if bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>/dev/null; then
-        echo -e "${GREEN}Xray 安装成功！${NC}"
-        return 0
+    # 检查是否有 root 权限
+    local use_sudo=""
+    if [ "$(id -u)" != "0" ]; then
+        if command -v sudo &> /dev/null; then
+            use_sudo="sudo"
+        else
+            echo -e "${RED}需要 root 权限安装 Xray${NC}"
+            return 1
+        fi
     fi
     
-    # 备用方法：手动下载
-    echo -e "${YELLOW}尝试备用安装方法...${NC}"
+    # 检查并安装 unzip
+    if ! command -v unzip &> /dev/null; then
+        echo -e "${YELLOW}安装 unzip...${NC}"
+        if command -v apt-get &> /dev/null; then
+            $use_sudo apt-get update && $use_sudo apt-get install -y unzip
+        elif command -v yum &> /dev/null; then
+            $use_sudo yum install -y unzip
+        elif command -v dnf &> /dev/null; then
+            $use_sudo dnf install -y unzip
+        elif command -v apk &> /dev/null; then
+            $use_sudo apk add unzip
+        fi
+    fi
+    
+    # 方法1：使用官方安装脚本
+    echo -e "${YELLOW}尝试使用官方安装脚本...${NC}"
+    if bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install 2>&1; then
+        if command -v xray &> /dev/null || [ -x "/usr/local/bin/xray" ]; then
+            export PATH="/usr/local/bin:$PATH"
+            echo -e "${GREEN}Xray 安装成功！${NC}"
+            return 0
+        fi
+    fi
+    
+    # 方法2：手动下载二进制文件
+    echo -e "${YELLOW}尝试手动下载安装...${NC}"
     local arch=$(uname -m)
     local xray_arch=""
     case $arch in
@@ -57,64 +94,98 @@ install_xray() {
     
     local latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
     if [ -z "$latest_version" ]; then
-        latest_version="v1.8.7"
+        latest_version="v24.12.18"
     fi
     
     local download_url="https://github.com/XTLS/Xray-core/releases/download/${latest_version}/Xray-linux-${xray_arch}.zip"
     
-    echo -e "${YELLOW}下载 Xray ${latest_version}...${NC}"
-    curl -L -o /tmp/xray.zip "$download_url" 2>/dev/null
+    echo -e "${YELLOW}下载 Xray ${latest_version} (${xray_arch})...${NC}"
+    if ! curl -L -o /tmp/xray.zip "$download_url" --progress-bar; then
+        echo -e "${RED}下载失败${NC}"
+        return 1
+    fi
     
     if [ -f /tmp/xray.zip ]; then
-        unzip -o /tmp/xray.zip -d /tmp/xray_temp 2>/dev/null
-        if [ -f /tmp/xray_temp/xray ]; then
-            sudo mv /tmp/xray_temp/xray /usr/local/bin/xray
-            sudo chmod +x /usr/local/bin/xray
-            rm -rf /tmp/xray.zip /tmp/xray_temp
-            echo -e "${GREEN}Xray 安装成功！${NC}"
-            return 0
+        rm -rf /tmp/xray_temp
+        mkdir -p /tmp/xray_temp
+        if unzip -o /tmp/xray.zip -d /tmp/xray_temp; then
+            if [ -f /tmp/xray_temp/xray ]; then
+                $use_sudo mkdir -p /usr/local/bin
+                $use_sudo mv /tmp/xray_temp/xray /usr/local/bin/xray
+                $use_sudo chmod +x /usr/local/bin/xray
+                rm -rf /tmp/xray.zip /tmp/xray_temp
+                export PATH="/usr/local/bin:$PATH"
+                echo -e "${GREEN}Xray 安装成功！${NC}"
+                return 0
+            fi
         fi
     fi
     
+    rm -rf /tmp/xray.zip /tmp/xray_temp
     echo -e "${RED}Xray 安装失败${NC}"
     return 1
 }
 
 # 生成 Reality 密钥对
 generate_reality_keypair() {
-    local public_key=""
-    local private_key=""
+    echo ""
+    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}     自动生成 Reality X25519 密钥对    ${NC}"
+    echo -e "${CYAN}========================================${NC}"
     
     # 检查 xray 是否已安装
-    if ! command -v xray &> /dev/null; then
+    local xray_cmd=""
+    if command -v xray &> /dev/null; then
+        xray_cmd="xray"
+    elif [ -x "/usr/local/bin/xray" ]; then
+        xray_cmd="/usr/local/bin/xray"
+    fi
+    
+    if [ -z "$xray_cmd" ]; then
         echo -e "${YELLOW}未检测到 Xray，正在自动安装...${NC}"
         if ! install_xray; then
-            echo -e "${RED}无法安装 Xray，请手动安装后重试${NC}"
-            echo -e "${YELLOW}安装命令: bash -c \"\$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ install${NC}"
+            echo -e "${RED}无法安装 Xray${NC}"
+            return 1
+        fi
+        # 重新检查
+        if command -v xray &> /dev/null; then
+            xray_cmd="xray"
+        elif [ -x "/usr/local/bin/xray" ]; then
+            xray_cmd="/usr/local/bin/xray"
+        else
+            echo -e "${RED}Xray 安装后仍无法找到${NC}"
             return 1
         fi
     fi
     
+    echo -e "${GREEN}使用 Xray: $xray_cmd${NC}"
+    echo -e "${YELLOW}正在生成密钥对...${NC}"
+    
     # 生成密钥对
-    echo -e "${GREEN}正在生成 Reality X25519 密钥对...${NC}"
-    local keys=$(xray x25519 2>/dev/null)
+    local keys=$($xray_cmd x25519 2>&1)
     
     if [ -z "$keys" ]; then
-        echo -e "${RED}生成密钥对失败${NC}"
+        echo -e "${RED}生成密钥对失败：无输出${NC}"
         return 1
     fi
     
-    REALITY_PRIVATE_KEY=$(echo "$keys" | grep "Private key:" | awk '{print $3}')
-    REALITY_PUBLIC_KEY=$(echo "$keys" | grep "Public key:" | awk '{print $3}')
+    # 调试输出
+    echo -e "${CYAN}Xray 输出:${NC}"
+    echo "$keys"
+    echo ""
+    
+    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -i "private" | awk '{print $NF}')
+    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -i "public" | awk '{print $NF}')
     
     if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
         echo -e "${RED}解析密钥对失败${NC}"
         return 1
     fi
     
-    echo -e "${GREEN}密钥对生成成功！${NC}"
-    echo -e "  Private Key: ${YELLOW}$REALITY_PRIVATE_KEY${NC}"
-    echo -e "  Public Key:  ${YELLOW}$REALITY_PUBLIC_KEY${NC}"
+    echo -e "${GREEN}✓ 密钥对生成成功！${NC}"
+    echo -e "  ${YELLOW}Private Key:${NC} $REALITY_PRIVATE_KEY"
+    echo -e "  ${YELLOW}Public Key:${NC}  $REALITY_PUBLIC_KEY"
+    echo ""
     return 0
 }
 
