@@ -155,8 +155,8 @@ generate_vless_reality() {
     # 获取参数
     get_server_ips || return
     
-    read -p "端口 [默认随机]: " port
-    port=${port:-$(generate_port)}
+    read -p "端口 [默认: 443]: " port
+    port=${port:-443}
     
     local uuid=$(generate_uuid)
     read -p "UUID [默认: $uuid]: " input_uuid
@@ -165,12 +165,39 @@ generate_vless_reality() {
     read -p "SNI [默认: $DEFAULT_SNI]: " sni
     sni=${sni:-$DEFAULT_SNI}
     
-    # 生成 Reality 密钥对 (这里用随机字符串模拟，实际应使用xray生成)
-    local public_key=$(generate_password 43)
-    read -p "Reality Public Key [默认随机]: " input_pubkey
-    public_key=${input_pubkey:-$public_key}
+    # Reality 密钥对 - 尝试使用 xray 生成，否则需要用户输入
+    local public_key=""
+    local private_key=""
     
-    local short_id=$(openssl rand -hex 4 2>/dev/null || generate_password 8)
+    if command -v xray &> /dev/null; then
+        echo -e "${GREEN}检测到 xray，正在生成 Reality 密钥对...${NC}"
+        local keys=$(xray x25519)
+        private_key=$(echo "$keys" | grep "Private key:" | awk '{print $3}')
+        public_key=$(echo "$keys" | grep "Public key:" | awk '{print $3}')
+        echo -e "${GREEN}已自动生成密钥对${NC}"
+    fi
+    
+    if [ -z "$public_key" ]; then
+        echo -e "${YELLOW}========================================${NC}"
+        echo -e "${YELLOW}需要 Reality 密钥对！${NC}"
+        echo -e "${YELLOW}请在服务器上运行: xray x25519${NC}"
+        echo -e "${YELLOW}或使用在线工具生成 X25519 密钥对${NC}"
+        echo -e "${YELLOW}========================================${NC}"
+    fi
+    
+    read -p "Reality Private Key (服务端用) [留空使用自动生成]: " input_privkey
+    [ -n "$input_privkey" ] && private_key="$input_privkey"
+    
+    read -p "Reality Public Key (客户端用) [留空使用自动生成]: " input_pubkey
+    [ -n "$input_pubkey" ] && public_key="$input_pubkey"
+    
+    if [ -z "$public_key" ]; then
+        echo -e "${RED}错误：必须提供 Reality Public Key！${NC}"
+        echo -e "${YELLOW}请先运行 'xray x25519' 生成密钥对${NC}"
+        return 1
+    fi
+    
+    local short_id=$(openssl rand -hex 8 2>/dev/null || head -c 16 /dev/urandom | xxd -p | head -c 16)
     read -p "Short ID [默认: $short_id]: " input_shortid
     short_id=${input_shortid:-$short_id}
     
@@ -214,7 +241,35 @@ generate_vless_reality() {
     echo -e "  UUID: $uuid"
     echo -e "  SNI: $sni"
     echo -e "  Public Key: $public_key"
+    echo -e "  Private Key: ${private_key:-未提供}"
     echo -e "  Short ID: $short_id"
+    echo ""
+    
+    # 输出服务端配置提示
+    echo -e "${BLUE}==================== 服务端配置 (Xray) ====================${NC}"
+    cat <<EOF
+{
+  "inbounds": [{
+    "port": ${port},
+    "protocol": "vless",
+    "settings": {
+      "clients": [{"id": "${uuid}", "flow": "xtls-rprx-vision"}],
+      "decryption": "none"
+    },
+    "streamSettings": {
+      "network": "tcp",
+      "security": "reality",
+      "realitySettings": {
+        "dest": "${sni}:443",
+        "serverNames": ["${sni}"],
+        "privateKey": "${private_key:-你的私钥}",
+        "shortIds": ["${short_id}"]
+      }
+    }
+  }]
+}
+EOF
+    echo -e "${BLUE}============================================================${NC}"
     echo ""
     
     # 生成 Clash 配置
@@ -394,21 +449,25 @@ generate_hysteria2() {
     
     get_server_ips || return
     
-    read -p "端口 [默认随机]: " port
-    port=${port:-$(generate_port)}
+    read -p "端口 [默认: 443]: " port
+    port=${port:-443}
     
     local password=$(generate_password 32)
-    read -p "密码 [默认随机]: " input_password
+    read -p "密码/Auth [默认随机]: " input_password
     password=${input_password:-$password}
     
-    read -p "SNI [默认: $DEFAULT_SNI]: " sni
+    read -p "SNI/域名 [默认: $DEFAULT_SNI]: " sni
     sni=${sni:-$DEFAULT_SNI}
     
+    echo -e "${YELLOW}注意：Hysteria2 需要有效的 TLS 证书！${NC}"
+    echo -e "${YELLOW}如果使用自签证书，客户端需要跳过证书验证${NC}"
     read -p "跳过证书验证 [Y/n]: " insecure
     if [[ "$insecure" =~ ^[Nn]$ ]]; then
         insecure_param=""
+        skip_cert="false"
     else
         insecure_param="&insecure=1"
+        skip_cert="true"
     fi
     
     read -p "节点名称 [默认: HY2-Node]: " node_name
@@ -450,11 +509,29 @@ generate_hysteria2() {
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  SNI: $sni"
+    echo -e "  跳过验证: $skip_cert"
+    echo ""
+    
+    # 输出服务端配置提示
+    echo -e "${BLUE}==================== 服务端配置 (Hysteria2) ====================${NC}"
+    cat <<EOF
+listen: :${port}
+tls:
+  cert: /path/to/cert.pem  # 修改为你的证书路径
+  key: /path/to/key.pem    # 修改为你的私钥路径
+auth:
+  type: password
+  password: ${password}
+masquerade:
+  type: proxy
+  proxy:
+    url: https://${sni}
+    rewriteHost: true
+EOF
+    echo -e "${BLUE}=================================================================${NC}"
     echo ""
     
     # 生成 Clash 配置 (Clash Meta/Mihomo 支持)
-    local skip_cert="false"
-    [[ -n "$insecure_param" ]] && skip_cert="true"
     echo -e "${PURPLE}==================== Clash 配置 (Mihomo) ====================${NC}"
     if [ -n "$SERVER_IPV4" ]; then
         echo -e "${CYAN}# IPv4 节点${NC}"
