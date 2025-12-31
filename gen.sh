@@ -217,6 +217,54 @@ generate_vless_reality() {
     echo -e "  Short ID: $short_id"
     echo ""
     
+    # 生成 Clash 配置
+    echo -e "${PURPLE}==================== Clash 配置 ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: vless
+  server: ${SERVER_IPV4}
+  port: ${port}
+  uuid: ${uuid}
+  network: tcp
+  tls: true
+  udp: true
+  flow: xtls-rprx-vision
+  servername: ${sni}
+  client-fingerprint: chrome
+  reality-opts:
+    public-key: ${public_key}
+    short-id: ${short_id}
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: vless
+  server: ${SERVER_IPV6}
+  port: ${port}
+  uuid: ${uuid}
+  network: tcp
+  tls: true
+  udp: true
+  flow: xtls-rprx-vision
+  servername: ${sni}
+  client-fingerprint: chrome
+  reality-opts:
+    public-key: ${public_key}
+    short-id: ${short_id}
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}====================================================${NC}"
+    echo ""
+    
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
         [ -n "$SERVER_IPV4" ] && save_node "VLESS-Reality-IPv4" "$link_v4"
@@ -298,6 +346,40 @@ generate_shadowsocks() {
     echo -e "  加密方式: $method"
     echo ""
     
+    # 生成 Clash 配置
+    echo -e "${PURPLE}==================== Clash 配置 ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: ss
+  server: ${SERVER_IPV4}
+  port: ${port}
+  cipher: ${method}
+  password: "${password}"
+  udp: true
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: ss
+  server: ${SERVER_IPV6}
+  port: ${port}
+  cipher: ${method}
+  password: "${password}"
+  udp: true
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}====================================================${NC}"
+    echo ""
+    
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
         [ -n "$SERVER_IPV4" ] && save_node "Shadowsocks-IPv4" "$link_v4"
@@ -368,6 +450,42 @@ generate_hysteria2() {
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  SNI: $sni"
+    echo ""
+    
+    # 生成 Clash 配置 (Clash Meta/Mihomo 支持)
+    local skip_cert="false"
+    [[ -n "$insecure_param" ]] && skip_cert="true"
+    echo -e "${PURPLE}==================== Clash 配置 (Mihomo) ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: hysteria2
+  server: ${SERVER_IPV4}
+  port: ${port}
+  password: ${password}
+  sni: ${sni}
+  skip-cert-verify: ${skip_cert}
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: hysteria2
+  server: ${SERVER_IPV6}
+  port: ${port}
+  password: ${password}
+  sni: ${sni}
+  skip-cert-verify: ${skip_cert}
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}=============================================================${NC}"
     echo ""
     
     read -p "是否保存该节点? [Y/n]: " save_choice
@@ -485,6 +603,58 @@ EOF
     echo -e "  TLS: ${tls:-无}"
     echo ""
     
+    # 生成 Clash 配置
+    local tls_enabled="false"
+    [[ "$tls" == "tls" ]] && tls_enabled="true"
+    echo -e "${PURPLE}==================== Clash 配置 ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: vmess
+  server: ${SERVER_IPV4}
+  port: ${port}
+  uuid: ${uuid}
+  alterId: 0
+  cipher: auto
+  udp: true
+  tls: ${tls_enabled}
+  servername: ${host}
+  network: ws
+  ws-opts:
+    path: ${ws_path}
+    headers:
+      Host: ${host}
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: vmess
+  server: ${SERVER_IPV6}
+  port: ${port}
+  uuid: ${uuid}
+  alterId: 0
+  cipher: auto
+  udp: true
+  tls: ${tls_enabled}
+  servername: ${host}
+  network: ws
+  ws-opts:
+    path: ${ws_path}
+    headers:
+      Host: ${host}
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}====================================================${NC}"
+    echo ""
+    
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
         [ -n "$SERVER_IPV4" ] && save_node "VMESS-WS-IPv4" "$link_v4"
@@ -555,6 +725,44 @@ generate_trojan() {
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  SNI: $sni"
+    echo ""
+    
+    # 生成 Clash 配置
+    local skip_cert="false"
+    [[ -n "$insecure_param" ]] && skip_cert="true"
+    echo -e "${PURPLE}==================== Clash 配置 ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: trojan
+  server: ${SERVER_IPV4}
+  port: ${port}
+  password: ${password}
+  udp: true
+  sni: ${sni}
+  skip-cert-verify: ${skip_cert}
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: trojan
+  server: ${SERVER_IPV6}
+  port: ${port}
+  password: ${password}
+  udp: true
+  sni: ${sni}
+  skip-cert-verify: ${skip_cert}
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}====================================================${NC}"
     echo ""
     
     read -p "是否保存该节点? [Y/n]: " save_choice
@@ -636,6 +844,54 @@ generate_vless_ws() {
     echo -e "  WS路径: $ws_path"
     echo -e "  Host: $host"
     echo -e "  TLS: ${security}"
+    echo ""
+    
+    # 生成 Clash 配置 (Clash Meta/Mihomo 支持 VLESS)
+    local tls_enabled="false"
+    [[ "$security" == "tls" ]] && tls_enabled="true"
+    echo -e "${PURPLE}==================== Clash 配置 (Mihomo) ====================${NC}"
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${CYAN}# IPv4 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv4"
+  type: vless
+  server: ${SERVER_IPV4}
+  port: ${port}
+  uuid: ${uuid}
+  udp: true
+  tls: ${tls_enabled}
+  servername: ${host}
+  network: ws
+  ws-opts:
+    path: ${ws_path}
+    headers:
+      Host: ${host}
+EOF
+        echo ""
+    fi
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${CYAN}# IPv6 节点${NC}"
+        cat <<EOF
+- name: "${node_name}-IPv6"
+  type: vless
+  server: ${SERVER_IPV6}
+  port: ${port}
+  uuid: ${uuid}
+  udp: true
+  tls: ${tls_enabled}
+  servername: ${host}
+  network: ws
+  ws-opts:
+    path: ${ws_path}
+    headers:
+      Host: ${host}
+EOF
+        echo ""
+    fi
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无可用的 Clash 配置${NC}"
+    fi
+    echo -e "${PURPLE}=============================================================${NC}"
     echo ""
     
     read -p "是否保存该节点? [Y/n]: " save_choice
