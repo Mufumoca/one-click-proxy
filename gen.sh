@@ -28,7 +28,7 @@ check_deps() {
         install_cmd="yum install -y"
         update_cmd=""
     else
-        echo -e "${RED}无法检测系统版本，请手动安装 curl wget openssl uuid-runtime/util-linux jq${PLAIN}"
+        echo -e "${RED}无法检测系统版本，请手动安装 curl wget openssl uuid-runtime/util-linux${PLAIN}"
         return
     fi
 
@@ -47,30 +47,39 @@ check_deps() {
             $install_cmd util-linux
         fi
     fi
-    
-    # 检查 jq
-    if ! command -v jq &> /dev/null; then
-         echo -e "${RED}正在安装 jq...${PLAIN}"
-         $install_cmd jq
-    fi
 }
 
-# 获取服务器IP (分别获取 v4 和 v6)
+# 获取服务器IP (修复版：更换源 + 伪装 User-Agent)
 get_ips() {
     echo -e "${SKYBLUE}正在检测 IP 地址...${PLAIN}"
     
-    # 获取 IPv4
-    IPV4_ADDR=$(curl -s4m 5 https://ip.sb)
-    if [[ -z "$IPV4_ADDR" ]]; then
-        IPV4_ADDR=$(curl -s4m 5 https://ifconfig.me)
+    # 定义浏览器 UA，防止被当作脚本拦截返回 403
+    local UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    # --- 获取 IPv4 ---
+    # 优先尝试亚马逊源
+    IPV4_ADDR=$(curl -s4 --user-agent "$UA" -m 5 http://checkip.amazonaws.com | tr -d '\n\r')
+    
+    # 如果亚马逊失败或返回了 HTML 错误，尝试 icanhazip
+    if [[ -z "$IPV4_ADDR" ]] || [[ "$IPV4_ADDR" == *"<"* ]]; then
+        IPV4_ADDR=$(curl -s4 --user-agent "$UA" -m 5 http://ipv4.icanhazip.com | tr -d '\n\r')
     fi
 
-    # 获取 IPv6
-    IPV6_ADDR=$(curl -s6m 5 https://ip.sb)
-    if [[ -z "$IPV6_ADDR" ]]; then
-        IPV6_ADDR=$(curl -s6m 5 https://ifconfig.me)
-    fi
+    # 再次校验是否还是包含 html，如果是则置空
+    if [[ "$IPV4_ADDR" == *"<"* ]]; then IPV4_ADDR=""; fi
 
+
+    # --- 获取 IPv6 ---
+    IPV6_ADDR=$(curl -s6 --user-agent "$UA" -m 5 http://ipv6.icanhazip.com | tr -d '\n\r')
+    
+    if [[ -z "$IPV6_ADDR" ]] || [[ "$IPV6_ADDR" == *"<"* ]]; then
+        IPV6_ADDR=$(curl -s6 --user-agent "$UA" -m 5 http://ifconfig.co/ip | tr -d '\n\r')
+    fi
+    
+    # 再次校验
+    if [[ "$IPV6_ADDR" == *"<"* ]]; then IPV6_ADDR=""; fi
+
+    # --- 输出结果 ---
     if [[ -n "$IPV4_ADDR" ]]; then
         echo -e "IPv4: ${GREEN}${IPV4_ADDR}${PLAIN}"
     else
@@ -84,7 +93,7 @@ get_ips() {
     fi
     
     if [[ -z "$IPV4_ADDR" && -z "$IPV6_ADDR" ]]; then
-        echo -e "${RED}错误：无法检测到任何公网 IP，请检查网络连接。${PLAIN}"
+        echo -e "${RED}错误：无法检测到任何有效 IP，请检查网络连接。${PLAIN}"
         exit 1
     fi
 }
@@ -115,7 +124,6 @@ get_reality_keys() {
 }
 
 # 辅助函数：输出并保存节点
-# 参数: $1=类型, $2=IP, $3=端口, $4=链接, $5=基础备注, $6=IP类型(IPv4/IPv6)
 save_and_print_link() {
     local type=$1
     local ip=$2
@@ -124,18 +132,11 @@ save_and_print_link() {
     local base_remark=$5
     local ip_ver=$6
     
-    # 最终备注
     local final_remark="${base_remark}-${ip_ver}"
-    
-    # 替换链接中的 hash 部分(如果之前的生成没加后缀)
-    # 大部分协议链接结尾是 #remark，我们这里确保链接里的备注也是新的
-    # 简单处理：如果链接里包含了备注占位符，这里不作复杂替换，直接生成时指定好了即可
-    # 这里我们假设传入的 link 已经包含了正确的备注或者还没加备注
     
     echo -e " [${ip_ver}] 链接: ${SKYBLUE}${link}${PLAIN}"
     echo "TYPE:${type}|REMARK:${final_remark}|LINK:${link}" >> "${DB_FILE}"
 }
-
 
 # 功能1: VLESS + Reality + Vision
 gen_vless_reality() {
@@ -159,14 +160,12 @@ gen_vless_reality() {
     echo -e "ShortId: ${YELLOW}${SHORT_ID}${PLAIN}"
     echo -e "---------------------------------------------------"
 
-    # 生成 IPv4 链接
     if [[ -n "$IPV4_ADDR" ]]; then
         REMARK_V4="${BASE_REMARK}-IPv4"
         LINK_V4="vless://${UUID}@${IPV4_ADDR}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEFAULT_SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#${REMARK_V4}"
         save_and_print_link "VLESS" "$IPV4_ADDR" "$PORT" "$LINK_V4" "$BASE_REMARK" "IPv4"
     fi
 
-    # 生成 IPv6 链接 (注意 IPv6 地址需要加 [])
     if [[ -n "$IPV6_ADDR" ]]; then
         REMARK_V6="${BASE_REMARK}-IPv6"
         LINK_V6="vless://${UUID}@[${IPV6_ADDR}]:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEFAULT_SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&type=tcp&headerType=none#${REMARK_V6}"
@@ -194,17 +193,14 @@ gen_shadowsocks() {
     echo -e "加密: ${YELLOW}${METHOD}${PLAIN}"
     echo -e "---------------------------------------------------"
 
-    # IPv4
     if [[ -n "$IPV4_ADDR" ]]; then
         REMARK_V4="${BASE_REMARK}-IPv4"
         LINK_V4="ss://${CREDENTIALS}@${IPV4_ADDR}:${PORT}#${REMARK_V4}"
         save_and_print_link "SS" "$IPV4_ADDR" "$PORT" "$LINK_V4" "$BASE_REMARK" "IPv4"
     fi
 
-    # IPv6
     if [[ -n "$IPV6_ADDR" ]]; then
         REMARK_V6="${BASE_REMARK}-IPv6"
-        # SS 链接中 IPv6 也建议加 []
         LINK_V6="ss://${CREDENTIALS}@[${IPV6_ADDR}]:${PORT}#${REMARK_V6}"
         save_and_print_link "SS" "$IPV6_ADDR" "$PORT" "$LINK_V6" "$BASE_REMARK" "IPv6"
     fi
@@ -226,17 +222,14 @@ gen_hysteria2() {
     echo -e "密码: ${YELLOW}${PASS}${PLAIN}"
     echo -e "---------------------------------------------------"
 
-    # IPv4
     if [[ -n "$IPV4_ADDR" ]]; then
         REMARK_V4="${BASE_REMARK}-IPv4"
         LINK_V4="hysteria2://${PASS}@${IPV4_ADDR}:${PORT}?sni=${DEFAULT_SNI}&insecure=1#${REMARK_V4}"
         save_and_print_link "HY2" "$IPV4_ADDR" "$PORT" "$LINK_V4" "$BASE_REMARK" "IPv4"
     fi
 
-    # IPv6
     if [[ -n "$IPV6_ADDR" ]]; then
         REMARK_V6="${BASE_REMARK}-IPv6"
-        # Hy2 链接 IPv6 加 []
         LINK_V6="hysteria2://${PASS}@[${IPV6_ADDR}]:${PORT}?sni=${DEFAULT_SNI}&insecure=1#${REMARK_V6}"
         save_and_print_link "HY2" "$IPV6_ADDR" "$PORT" "$LINK_V6" "$BASE_REMARK" "IPv6"
     fi
@@ -258,7 +251,6 @@ view_nodes() {
             REMARK=$(echo "$line" | awk -F'|' '{print $2}' | cut -d':' -f2)
             LINK=$(echo "$line" | awk -F'|' '{print $3}' | cut -d':' -f2-)
             
-            # 根据备注着色区分 v4 和 v6
             if [[ "$REMARK" == *"IPv6"* ]]; then
                 COLOR=$SKYBLUE
             else
