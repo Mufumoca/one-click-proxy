@@ -174,17 +174,33 @@ generate_reality_keypair() {
     echo "$keys"
     echo ""
     
-    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -i "private" | awk '{print $NF}')
-    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -i "public" | awk '{print $NF}')
+    # 兼容新旧版本 Xray 的输出格式
+    # 旧版: "Private key: xxx" "Public key: xxx"
+    # 新版 v25+: "PrivateKey: xxx" "Password: xxx" (Password 就是 Public Key)
+    
+    # 尝试解析私钥 (匹配 "Private key:" 或 "PrivateKey:")
+    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -iE "^Private\s*key:|^PrivateKey:" | awk -F': ' '{print $2}' | tr -d ' ')
+    
+    # 尝试解析公钥 (匹配 "Public key:" 或 "Password:" - 新版用 Password 表示公钥)
+    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -iE "^Public\s*key:|^Password:" | head -1 | awk -F': ' '{print $2}' | tr -d ' ')
+    
+    # 如果上面的方法失败，尝试按行号解析（第一行私钥，第二行公钥）
+    if [ -z "$REALITY_PRIVATE_KEY" ]; then
+        REALITY_PRIVATE_KEY=$(echo "$keys" | head -1 | awk -F': ' '{print $2}' | tr -d ' ')
+    fi
+    if [ -z "$REALITY_PUBLIC_KEY" ]; then
+        REALITY_PUBLIC_KEY=$(echo "$keys" | sed -n '2p' | awk -F': ' '{print $2}' | tr -d ' ')
+    fi
     
     if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
         echo -e "${RED}解析密钥对失败${NC}"
+        echo -e "${YELLOW}请检查上方 Xray 输出，手动输入密钥${NC}"
         return 1
     fi
     
     echo -e "${GREEN}✓ 密钥对生成成功！${NC}"
-    echo -e "  ${YELLOW}Private Key:${NC} $REALITY_PRIVATE_KEY"
-    echo -e "  ${YELLOW}Public Key:${NC}  $REALITY_PUBLIC_KEY"
+    echo -e "  ${YELLOW}Private Key (服务端):${NC} $REALITY_PRIVATE_KEY"
+    echo -e "  ${YELLOW}Public Key (客户端):${NC}  $REALITY_PUBLIC_KEY"
     echo ""
     return 0
 }
