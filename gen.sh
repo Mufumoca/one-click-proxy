@@ -178,23 +178,34 @@ generate_reality_keypair() {
     # 旧版: "Private key: xxx" "Public key: xxx"
     # 新版 v25+: "PrivateKey: xxx" "Password: xxx" (Password 就是 Public Key)
     
-    # 尝试解析私钥 (匹配 "Private key:" 或 "PrivateKey:")
-    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -iE "^Private\s*key:|^PrivateKey:" | awk -F': ' '{print $2}' | tr -d ' ')
+    # 方法1: 直接用 grep 和 cut 提取冒号后的值
+    # 私钥: 匹配包含 "Private" 的行（不区分大小写）
+    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -i "private" | cut -d':' -f2 | tr -d ' ')
     
-    # 尝试解析公钥 (匹配 "Public key:" 或 "Password:" - 新版用 Password 表示公钥)
-    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -iE "^Public\s*key:|^Password:" | head -1 | awk -F': ' '{print $2}' | tr -d ' ')
+    # 公钥: 新版是 "Password:", 旧版是 "Public key:"
+    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -iE "^Password:|^Public" | head -1 | cut -d':' -f2 | tr -d ' ')
     
-    # 如果上面的方法失败，尝试按行号解析（第一行私钥，第二行公钥）
+    # 方法2: 如果上面失败，尝试按行解析（第1行私钥，第2行公钥）
     if [ -z "$REALITY_PRIVATE_KEY" ]; then
-        REALITY_PRIVATE_KEY=$(echo "$keys" | head -1 | awk -F': ' '{print $2}' | tr -d ' ')
+        REALITY_PRIVATE_KEY=$(echo "$keys" | sed -n '1p' | cut -d':' -f2 | tr -d ' ')
     fi
     if [ -z "$REALITY_PUBLIC_KEY" ]; then
-        REALITY_PUBLIC_KEY=$(echo "$keys" | sed -n '2p' | awk -F': ' '{print $2}' | tr -d ' ')
+        REALITY_PUBLIC_KEY=$(echo "$keys" | sed -n '2p' | cut -d':' -f2 | tr -d ' ')
     fi
     
+    # 验证密钥格式（X25519 密钥通常是 43-44 个字符的 base64）
     if [ -z "$REALITY_PRIVATE_KEY" ] || [ -z "$REALITY_PUBLIC_KEY" ]; then
         echo -e "${RED}解析密钥对失败${NC}"
         echo -e "${YELLOW}请检查上方 Xray 输出，手动输入密钥${NC}"
+        return 1
+    fi
+    
+    # 检查长度是否合理
+    local priv_len=${#REALITY_PRIVATE_KEY}
+    local pub_len=${#REALITY_PUBLIC_KEY}
+    
+    if [ $priv_len -lt 40 ] || [ $pub_len -lt 40 ]; then
+        echo -e "${RED}密钥长度异常 (Private: $priv_len, Public: $pub_len)${NC}"
         return 1
     fi
     
