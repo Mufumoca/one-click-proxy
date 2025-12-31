@@ -178,12 +178,12 @@ generate_reality_keypair() {
     # 旧版: "Private key: xxx" "Public key: xxx"
     # 新版 v25+: "PrivateKey: xxx" "Password: xxx" (Password 就是 Public Key)
     
-    # 方法1: 直接用 grep 和 cut 提取冒号后的值
-    # 私钥: 匹配包含 "Private" 的行（不区分大小写）
-    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -i "private" | cut -d':' -f2 | tr -d ' ')
+    # 方法1: 直接用 grep 和 cut 提取冒号后的值（不要求行首匹配）
+    # 私钥: 匹配包含 "PrivateKey" 或 "Private key" 的行
+    REALITY_PRIVATE_KEY=$(echo "$keys" | grep -i "privatekey\|private key" | head -1 | cut -d':' -f2 | tr -d ' ')
     
     # 公钥: 新版是 "Password:", 旧版是 "Public key:"
-    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -iE "^Password:|^Public" | head -1 | cut -d':' -f2 | tr -d ' ')
+    REALITY_PUBLIC_KEY=$(echo "$keys" | grep -iE "password:|public key:" | head -1 | cut -d':' -f2 | tr -d ' ')
     
     # 方法2: 如果上面失败，尝试按行解析（第1行私钥，第2行公钥）
     if [ -z "$REALITY_PRIVATE_KEY" ]; then
