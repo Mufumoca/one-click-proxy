@@ -50,14 +50,57 @@ base64_encode() {
     echo -n "$1" | base64 | tr -d '\n'
 }
 
-# 获取服务器IP
-get_server_ip() {
+# 获取服务器IPv4地址
+get_server_ipv4() {
     local ip
-    ip=$(curl -s4 ip.sb 2>/dev/null || curl -s4 ifconfig.me 2>/dev/null || curl -s4 icanhazip.com 2>/dev/null)
-    if [ -z "$ip" ]; then
-        read -p "无法自动获取IP，请手动输入服务器IP: " ip
-    fi
+    ip=$(curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s4 --connect-timeout 5 icanhazip.com 2>/dev/null)
     echo "$ip"
+}
+
+# 获取服务器IPv6地址
+get_server_ipv6() {
+    local ip
+    ip=$(curl -s6 --connect-timeout 5 ip.sb 2>/dev/null || curl -s6 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s6 --connect-timeout 5 icanhazip.com 2>/dev/null)
+    echo "$ip"
+}
+
+# 获取服务器IP（交互式，用于手动输入）
+get_server_ips() {
+    echo -e "${YELLOW}正在检测服务器IP地址...${NC}"
+    
+    SERVER_IPV4=$(get_server_ipv4)
+    SERVER_IPV6=$(get_server_ipv6)
+    
+    if [ -n "$SERVER_IPV4" ]; then
+        echo -e "${GREEN}检测到 IPv4: $SERVER_IPV4${NC}"
+    else
+        echo -e "${YELLOW}未检测到 IPv4 地址${NC}"
+    fi
+    
+    if [ -n "$SERVER_IPV6" ]; then
+        echo -e "${GREEN}检测到 IPv6: $SERVER_IPV6${NC}"
+    else
+        echo -e "${YELLOW}未检测到 IPv6 地址${NC}"
+    fi
+    
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}无法自动获取IP地址${NC}"
+        read -p "请手动输入 IPv4 地址 (留空跳过): " SERVER_IPV4
+        read -p "请手动输入 IPv6 地址 (留空跳过): " SERVER_IPV6
+    else
+        read -p "是否修改 IPv4 地址? [留空使用检测值]: " input_ipv4
+        [ -n "$input_ipv4" ] && SERVER_IPV4="$input_ipv4"
+        read -p "是否修改 IPv6 地址? [留空使用检测值]: " input_ipv6
+        [ -n "$input_ipv6" ] && SERVER_IPV6="$input_ipv6"
+    fi
+    
+    if [ -z "$SERVER_IPV4" ] && [ -z "$SERVER_IPV6" ]; then
+        echo -e "${RED}错误：至少需要一个IP地址！${NC}"
+        return 1
+    fi
+    
+    echo ""
+    return 0
 }
 
 # 保存节点到文件
@@ -110,7 +153,8 @@ generate_vless_reality() {
     echo ""
     
     # 获取参数
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认随机]: " port
     port=${port:-$(generate_port)}
     
@@ -132,21 +176,38 @@ generate_vless_reality() {
     
     read -p "节点名称 [默认: VLESS-Reality]: " node_name
     node_name=${node_name:-"VLESS-Reality"}
-    node_name_encoded=$(echo -n "$node_name" | sed 's/ /%20/g')
-    
-    # 生成链接
-    local link="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${node_name_encoded}"
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}VLESS + Reality + Vision 节点生成成功！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local node_name_v4_encoded=$(echo -n "$node_name_v4" | sed 's/ /%20/g')
+        local link_v4="vless://${uuid}@${SERVER_IPV4}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${node_name_v4_encoded}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
+    
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local node_name_v6_encoded=$(echo -n "$node_name_v6" | sed 's/ /%20/g')
+        local link_v6="vless://${uuid}@[${SERVER_IPV6}]:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${public_key}&sid=${short_id}&type=tcp&headerType=none#${node_name_v6_encoded}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  UUID: $uuid"
     echo -e "  SNI: $sni"
@@ -156,7 +217,8 @@ generate_vless_reality() {
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "VLESS-Reality" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "VLESS-Reality-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "VLESS-Reality-IPv6" "$link_v6"
     fi
 }
 
@@ -165,7 +227,8 @@ generate_shadowsocks() {
     echo -e "${YELLOW}正在生成 Shadowsocks 节点...${NC}"
     echo ""
     
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认随机]: " port
     port=${port:-$(generate_port)}
     
@@ -191,22 +254,41 @@ generate_shadowsocks() {
     
     read -p "节点名称 [默认: SS-Node]: " node_name
     node_name=${node_name:-"SS-Node"}
-    node_name_encoded=$(echo -n "$node_name" | sed 's/ /%20/g')
     
     # SS链接格式: ss://BASE64(method:password)@server:port#name
     local userinfo=$(base64_encode "${method}:${password}")
-    local link="ss://${userinfo}@${server_ip}:${port}#${node_name_encoded}"
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Shadowsocks 节点生成成功！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local node_name_v4_encoded=$(echo -n "$node_name_v4" | sed 's/ /%20/g')
+        local link_v4="ss://${userinfo}@${SERVER_IPV4}:${port}#${node_name_v4_encoded}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
+    
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local node_name_v6_encoded=$(echo -n "$node_name_v6" | sed 's/ /%20/g')
+        local link_v6="ss://${userinfo}@[${SERVER_IPV6}]:${port}#${node_name_v6_encoded}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  加密方式: $method"
@@ -214,7 +296,8 @@ generate_shadowsocks() {
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "Shadowsocks" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "Shadowsocks-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "Shadowsocks-IPv6" "$link_v6"
     fi
 }
 
@@ -223,7 +306,8 @@ generate_hysteria2() {
     echo -e "${YELLOW}正在生成 Hysteria2 节点...${NC}"
     echo ""
     
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认随机]: " port
     port=${port:-$(generate_port)}
     
@@ -243,21 +327,38 @@ generate_hysteria2() {
     
     read -p "节点名称 [默认: HY2-Node]: " node_name
     node_name=${node_name:-"HY2-Node"}
-    node_name_encoded=$(echo -n "$node_name" | sed 's/ /%20/g')
-    
-    # HY2链接格式
-    local link="hysteria2://${password}@${server_ip}:${port}?sni=${sni}${insecure_param}#${node_name_encoded}"
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Hysteria2 节点生成成功！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local node_name_v4_encoded=$(echo -n "$node_name_v4" | sed 's/ /%20/g')
+        local link_v4="hysteria2://${password}@${SERVER_IPV4}:${port}?sni=${sni}${insecure_param}#${node_name_v4_encoded}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
+    
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local node_name_v6_encoded=$(echo -n "$node_name_v6" | sed 's/ /%20/g')
+        local link_v6="hysteria2://${password}@[${SERVER_IPV6}]:${port}?sni=${sni}${insecure_param}#${node_name_v6_encoded}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  SNI: $sni"
@@ -265,7 +366,8 @@ generate_hysteria2() {
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "Hysteria2" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "Hysteria2-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "Hysteria2-IPv6" "$link_v6"
     fi
 }
 
@@ -274,7 +376,8 @@ generate_vmess_ws() {
     echo -e "${YELLOW}正在生成 VMESS + WS 节点...${NC}"
     echo ""
     
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认随机]: " port
     port=${port:-$(generate_port)}
     
@@ -298,12 +401,20 @@ generate_vmess_ws() {
     read -p "节点名称 [默认: VMESS-WS]: " node_name
     node_name=${node_name:-"VMESS-WS"}
     
-    # VMESS JSON格式
-    local vmess_json=$(cat <<EOF
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}VMESS + WS 节点生成成功！${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local vmess_json_v4=$(cat <<EOF
 {
   "v": "2",
-  "ps": "${node_name}",
-  "add": "${server_ip}",
+  "ps": "${node_name_v4}",
+  "add": "${SERVER_IPV4}",
   "port": "${port}",
   "id": "${uuid}",
   "aid": "0",
@@ -318,20 +429,47 @@ generate_vmess_ws() {
 }
 EOF
 )
+        local vmess_base64_v4=$(echo -n "$vmess_json_v4" | base64 | tr -d '\n')
+        local link_v4="vmess://${vmess_base64_v4}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
     
-    local vmess_base64=$(echo -n "$vmess_json" | base64 | tr -d '\n')
-    local link="vmess://${vmess_base64}"
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local vmess_json_v6=$(cat <<EOF
+{
+  "v": "2",
+  "ps": "${node_name_v6}",
+  "add": "${SERVER_IPV6}",
+  "port": "${port}",
+  "id": "${uuid}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${host}",
+  "path": "${ws_path}",
+  "tls": "${tls}",
+  "sni": "${host}",
+  "alpn": ""
+}
+EOF
+)
+        local vmess_base64_v6=$(echo -n "$vmess_json_v6" | base64 | tr -d '\n')
+        local link_v6="vmess://${vmess_base64_v6}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
     
-    echo ""
-    echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}VMESS + WS 节点生成成功！${NC}"
-    echo -e "${GREEN}========================================${NC}"
-    echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  UUID: $uuid"
     echo -e "  WS路径: $ws_path"
@@ -341,7 +479,8 @@ EOF
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "VMESS-WS" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "VMESS-WS-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "VMESS-WS-IPv6" "$link_v6"
     fi
 }
 
@@ -350,7 +489,8 @@ generate_trojan() {
     echo -e "${YELLOW}正在生成 Trojan 节点...${NC}"
     echo ""
     
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认: 443]: " port
     port=${port:-443}
     
@@ -370,20 +510,38 @@ generate_trojan() {
     
     read -p "节点名称 [默认: Trojan-Node]: " node_name
     node_name=${node_name:-"Trojan-Node"}
-    node_name_encoded=$(echo -n "$node_name" | sed 's/ /%20/g')
-    
-    local link="trojan://${password}@${server_ip}:${port}?security=tls&sni=${sni}&type=tcp${insecure_param}#${node_name_encoded}"
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Trojan 节点生成成功！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local node_name_v4_encoded=$(echo -n "$node_name_v4" | sed 's/ /%20/g')
+        local link_v4="trojan://${password}@${SERVER_IPV4}:${port}?security=tls&sni=${sni}&type=tcp${insecure_param}#${node_name_v4_encoded}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
+    
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local node_name_v6_encoded=$(echo -n "$node_name_v6" | sed 's/ /%20/g')
+        local link_v6="trojan://${password}@[${SERVER_IPV6}]:${port}?security=tls&sni=${sni}&type=tcp${insecure_param}#${node_name_v6_encoded}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  密码: $password"
     echo -e "  SNI: $sni"
@@ -391,7 +549,8 @@ generate_trojan() {
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "Trojan" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "Trojan-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "Trojan-IPv6" "$link_v6"
     fi
 }
 
@@ -400,7 +559,8 @@ generate_vless_ws() {
     echo -e "${YELLOW}正在生成 VLESS + WS 节点...${NC}"
     echo ""
     
-    local server_ip=$(get_server_ip)
+    get_server_ips || return
+    
     read -p "端口 [默认随机]: " port
     port=${port:-$(generate_port)}
     
@@ -425,20 +585,40 @@ generate_vless_ws() {
     
     read -p "节点名称 [默认: VLESS-WS]: " node_name
     node_name=${node_name:-"VLESS-WS"}
-    node_name_encoded=$(echo -n "$node_name" | sed 's/ /%20/g')
     
-    local link="vless://${uuid}@${server_ip}:${port}?encryption=none&type=ws&host=${host}&path=$(echo -n "$ws_path" | sed 's/\//%2F/g')${tls_param}#${node_name_encoded}"
+    local ws_path_encoded=$(echo -n "$ws_path" | sed 's/\//%2F/g')
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}VLESS + WS 节点生成成功！${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
-    echo -e "${CYAN}节点链接:${NC}"
-    echo -e "${YELLOW}$link${NC}"
-    echo ""
+    
+    # 生成 IPv4 节点
+    if [ -n "$SERVER_IPV4" ]; then
+        local node_name_v4="${node_name}-IPv4"
+        local node_name_v4_encoded=$(echo -n "$node_name_v4" | sed 's/ /%20/g')
+        local link_v4="vless://${uuid}@${SERVER_IPV4}:${port}?encryption=none&type=ws&host=${host}&path=${ws_path_encoded}${tls_param}#${node_name_v4_encoded}"
+        
+        echo -e "${CYAN}【IPv4 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v4${NC}"
+        echo ""
+    fi
+    
+    # 生成 IPv6 节点
+    if [ -n "$SERVER_IPV6" ]; then
+        local node_name_v6="${node_name}-IPv6"
+        local node_name_v6_encoded=$(echo -n "$node_name_v6" | sed 's/ /%20/g')
+        local link_v6="vless://${uuid}@[${SERVER_IPV6}]:${port}?encryption=none&type=ws&host=${host}&path=${ws_path_encoded}${tls_param}#${node_name_v6_encoded}"
+        
+        echo -e "${CYAN}【IPv6 节点链接】${NC}"
+        echo -e "${YELLOW}$link_v6${NC}"
+        echo ""
+    fi
+    
     echo -e "${CYAN}节点信息:${NC}"
-    echo -e "  服务器: $server_ip"
+    [ -n "$SERVER_IPV4" ] && echo -e "  IPv4: $SERVER_IPV4"
+    [ -n "$SERVER_IPV6" ] && echo -e "  IPv6: $SERVER_IPV6"
     echo -e "  端口: $port"
     echo -e "  UUID: $uuid"
     echo -e "  WS路径: $ws_path"
@@ -448,7 +628,8 @@ generate_vless_ws() {
     
     read -p "是否保存该节点? [Y/n]: " save_choice
     if [[ ! "$save_choice" =~ ^[Nn]$ ]]; then
-        save_node "VLESS-WS" "$link"
+        [ -n "$SERVER_IPV4" ] && save_node "VLESS-WS-IPv4" "$link_v4"
+        [ -n "$SERVER_IPV6" ] && save_node "VLESS-WS-IPv6" "$link_v6"
     fi
 }
 
